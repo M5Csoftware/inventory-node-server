@@ -1,4 +1,4 @@
-﻿import Fastify from "fastify";
+import Fastify from "fastify";
 import fastifyCors from "@fastify/cors";
 import fastifyCompress from "@fastify/compress";
 import fastifyMultipart from "@fastify/multipart";
@@ -26,7 +26,25 @@ const fastify = Fastify({
 const frontendUrl = process.env.FRONTEND_URL || "*";
 
 fastify.register(fastifyCors, {
-  origin: frontendUrl === "*" ? true : [frontendUrl],
+  origin: (origin, cb) => {
+    // Allow non-browser requests (curl, server-to-server, etc.)
+    if (!origin) return cb(null, true);
+
+    // If wildcard configured
+    if (frontendUrl === "*") return cb(null, true);
+
+    // Always allow any Vercel domain and localhost
+    if (
+      origin === frontendUrl ||
+      origin.endsWith(".vercel.app") ||
+      origin.includes("localhost") ||
+      origin.includes("127.0.0.1")
+    ) {
+      return cb(null, true);
+    }
+
+    return cb(null, true);
+  },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "x-database"],
   credentials: true,
