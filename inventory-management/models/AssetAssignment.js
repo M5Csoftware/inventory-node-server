@@ -14,14 +14,8 @@ const assetAssignmentSchema = new mongoose.Schema({
   modelNumber: { type: String },
   serialNumber: { type: String },
   branch: { type: String, enum: ['Ahmedabad', 'Ludhiana', 'Delhi', 'Mumbai'], required: true },
-  department: { 
-    type: String, 
-    enum: ['Operations', 'Collections', 'Customer support', 'Sales support', 'Accounts', 'Billing', 'HR', 'Management'] 
-  },
-  approvedBy: { 
-    type: String, 
-    enum: ['Dheeraj', 'Chirag', 'Neha', 'Mandeep', 'Sangeeta', 'Rahul'] 
-  },
+  department: { type: String },
+  approvedBy: { type: String },
 }, { timestamps: true });
 
 const AssetAssignment = (dbName) => {
