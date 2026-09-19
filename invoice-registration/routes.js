@@ -42,7 +42,7 @@ export default async function invoiceRegistrationRoutes(fastify, options) {
   
   // ── CONFIG ROUTES ──
   fastify.get('/config', async (request, reply) => {
-    let config = await AppConfig().findOne();
+    let config = await AppConfig().findOne().lean();
     if (!config) {
       config = await AppConfig().create({ threshold: 50000, currency: 'INR' });
     }
@@ -50,13 +50,13 @@ export default async function invoiceRegistrationRoutes(fastify, options) {
   });
 
   fastify.put('/config', async (request, reply) => {
-    const updated = await AppConfig().findOneAndUpdate({}, request.body, { new: true, upsert: true });
+    const updated = await AppConfig().findOneAndUpdate({}, request.body, { new: true, upsert: true }).lean();
     return { success: true, data: updated };
   });
 
   // ── TEAM ROUTES ──
   fastify.get('/team', async (request, reply) => {
-    const team = await TeamMember().find();
+    const team = await TeamMember().find().lean();
     return { success: true, data: team };
   });
 
@@ -73,7 +73,7 @@ export default async function invoiceRegistrationRoutes(fastify, options) {
   fastify.put('/team/:id', async (request, reply) => {
     const { id } = request.params;
     try {
-      const updated = await TeamMember().findOneAndUpdate({ id }, request.body, { new: true });
+      const updated = await TeamMember().findOneAndUpdate({ id }, request.body, { new: true }).lean();
       if (!updated) return reply.status(404).send({ success: false, message: 'Not found' });
       return { success: true, data: updated };
     } catch (error) {
@@ -89,13 +89,23 @@ export default async function invoiceRegistrationRoutes(fastify, options) {
 
   // ── INVOICE ROUTES ──
   fastify.get('/invoices', async (request, reply) => {
-    const { branch } = request.query || {};
+    const { branch, includeImages } = request.query || {};
     const query = {};
     if (branch && branch !== 'All') {
       query.branch = branch;
     }
-    const invoices = await Invoice().find(query).sort({ createdAt: -1 });
+    // Exclude heavy base64 image strings from list queries by default unless requested
+    const projection = includeImages === 'true' ? {} : { invoiceImage: 0, invoiceImages: 0 };
+    const invoices = await Invoice().find(query, projection).sort({ createdAt: -1 }).lean();
     return { success: true, data: invoices };
+  });
+
+  // Single invoice detail route (includes images)
+  fastify.get('/invoices/:id', async (request, reply) => {
+    const { id } = request.params;
+    const invoice = await Invoice().findOne({ id }).lean();
+    if (!invoice) return reply.status(404).send({ success: false, message: 'Invoice not found' });
+    return { success: true, data: invoice };
   });
 
   fastify.post('/invoices', async (request, reply) => {
