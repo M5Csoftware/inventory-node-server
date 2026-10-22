@@ -3197,6 +3197,19 @@ export default async function inventoryRoutes(fastify, options) {
         });
       }
 
+      // Verify that all referenced product IDs exist in the catalog
+      const prodIds = Array.from(new Set(Array.from(serialMap.values()).map((i) => i.productId)));
+      const existingProducts = await Product(dbName).find({ id: { $in: prodIds } }, { id: 1, name: 1 }).lean();
+      const existingProdIds = new Set(existingProducts.map((p) => p.id));
+      const uncreatedProducts = Array.from(serialMap.values()).filter((i) => !existingProdIds.has(i.productId));
+      if (uncreatedProducts.length > 0) {
+        return reply.status(400).send({
+          success: false,
+          message: `Validation failed: Product "${uncreatedProducts[0].productName || uncreatedProducts[0].productId}" is not created in inventory. Please create the product first.`,
+          uncreatedProducts: uncreatedProducts.map((i) => ({ productId: i.productId, productName: i.productName })),
+        });
+      }
+
       const cleanSerials = Array.from(serialMap.values()).map(
         (i) => i.serialNumber
       );
