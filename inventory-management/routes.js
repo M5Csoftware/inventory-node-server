@@ -3141,6 +3141,143 @@ export default async function inventoryRoutes(fastify, options) {
     }
   });
 
+  // POST bulk create asset serials
+  fastify.post("/asset-serials/bulk", async (request, reply) => {
+    const dbName = getDbName(request) || "m5c-inventory";
+    const items = Array.isArray(request.body)
+      ? request.body
+      : request.body?.items || [];
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return reply.status(400).send({
+        success: false,
+        message: "An array of asset items is required",
+      });
+    }
+
+    try {
+      const AssetSerialModel = AssetSerial(dbName);
+      const serialMap = new Map();
+      const internalDuplicates = [];
+      const invalidItems = [];
+
+      items.forEach((item, index) => {
+        const cleanSerial = (item.serialNumber || "").trim();
+        if (!item.productId || !cleanSerial || !item.branch) {
+          invalidItems.push({
+            index,
+            serial: cleanSerial,
+            reason: "Missing productId, serialNumber, or branch",
+          });
+          return;
+        }
+        if (serialMap.has(cleanSerial.toLowerCase())) {
+          internalDuplicates.push(cleanSerial);
+        } else {
+          serialMap.set(cleanSerial.toLowerCase(), {
+            ...item,
+            serialNumber: cleanSerial,
+          });
+        }
+      });
+
+      if (invalidItems.length > 0) {
+        return reply.status(400).send({
+          success: false,
+          message: `Validation failed: ${invalidItems.length} items missing required fields`,
+          invalidItems,
+        });
+      }
+
+      if (internalDuplicates.length > 0) {
+        return reply.status(400).send({
+          success: false,
+          message: `Duplicate serial numbers found within upload: ${internalDuplicates.join(", ")}`,
+          duplicates: internalDuplicates,
+        });
+      }
+
+      // Verify that all referenced product IDs exist in the catalog
+      const prodIds = Array.from(new Set(Array.from(serialMap.values()).map((i) => i.productId)));
+      const existingProducts = await Product(dbName).find({ id: { $in: prodIds } }, { id: 1, name: 1 }).lean();
+      const existingProdIds = new Set(existingProducts.map((p) => p.id));
+      const uncreatedProducts = Array.from(serialMap.values()).filter((i) => !existingProdIds.has(i.productId));
+      if (uncreatedProducts.length > 0) {
+        return reply.status(400).send({
+          success: false,
+          message: `Validation failed: Product "${uncreatedProducts[0].productName || uncreatedProducts[0].productId}" is not created in inventory. Please create the product first.`,
+          uncreatedProducts: uncreatedProducts.map((i) => ({ productId: i.productId, productName: i.productName })),
+        });
+      }
+
+      const cleanSerials = Array.from(serialMap.values()).map(
+        (i) => i.serialNumber
+      );
+      const existingInDb = await AssetSerialModel.find(
+        { serialNumber: { $in: cleanSerials } },
+        { serialNumber: 1 }
+      ).lean();
+
+      if (existingInDb.length > 0) {
+        const foundDupes = existingInDb.map((d) => d.serialNumber);
+        return reply.status(400).send({
+          success: false,
+          message: `The following serial numbers already exist in the system: ${foundDupes.join(", ")}`,
+          duplicates: foundDupes,
+        });
+      }
+
+      const allSerials = await AssetSerialModel.find({}, { id: 1 }).lean();
+      let maxNum = 0;
+      for (const s of allSerials) {
+        if (s.id && s.id.startsWith("AS-")) {
+          const num = parseInt(s.id.replace("AS-", ""), 10);
+          if (!isNaN(num) && num > maxNum) maxNum = num;
+        }
+      }
+
+      const toInsert = Array.from(serialMap.values()).map((item, idx) => {
+        const nextId = `AS-${String(maxNum + 1 + idx).padStart(4, "0")}`;
+        return {
+          id: nextId,
+          productId: item.productId,
+          productName: item.productName || "Asset",
+          serialNumber: item.serialNumber,
+          model: item.model || "",
+          warranty: item.warranty || "",
+          purchaseDate:
+            item.purchaseDate || new Date().toISOString().slice(0, 10),
+          invoiceNumber: item.invoiceNumber || "",
+          supplier: item.supplier || "",
+          branch: item.branch,
+          amount: !isNaN(Number(item.amount)) ? Number(item.amount) : 0,
+          status: item.status || "In Stock",
+          notes: item.notes || "",
+        };
+      });
+
+      const inserted = await AssetSerialModel.insertMany(toInsert);
+
+      await createAuditLog(
+        dbName,
+        {
+          action: "Bulk Asset Serials Created",
+          category: "Assets",
+          details: `Bulk registered ${inserted.length} asset serials into branch ${items[0]?.branch || "All"}`,
+          target: `${inserted.length} serials`,
+          branch: items[0]?.branch || "All",
+          referenceId: inserted[0]?.id || "",
+        },
+        request
+      );
+
+      return { success: true, count: inserted.length, data: inserted };
+    } catch (error) {
+      console.error("Error bulk creating asset serials:", error);
+      return reply.status(400).send({ success: false, message: error.message });
+    }
+  });
+
   // PUT update asset serial
   fastify.put("/asset-serials/:id", async (request, reply) => {
     const dbName = getDbName(request) || "m5c-inventory";
